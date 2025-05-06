@@ -1,31 +1,386 @@
-﻿
-Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.4.33213.308
-MinimumVisualStudioVersion = 10.0.40219.1
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ConsoleApplication1", "ConsoleApplication1\ConsoleApplication1.vcxproj", "{AEAC8384-1F3B-4B46-B595-738C74C38920}"
-EndProject
-Global
-	GlobalSection(SolutionConfigurationPlatforms) = preSolution
-		Debug|x64 = Debug|x64
-		Debug|x86 = Debug|x86
-		Release|x64 = Release|x64
-		Release|x86 = Release|x86
-	EndGlobalSection
-	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{AEAC8384-1F3B-4B46-B595-738C74C38920}.Debug|x64.ActiveCfg = Debug|x64
-		{AEAC8384-1F3B-4B46-B595-738C74C38920}.Debug|x64.Build.0 = Debug|x64
-		{AEAC8384-1F3B-4B46-B595-738C74C38920}.Debug|x86.ActiveCfg = Debug|Win32
-		{AEAC8384-1F3B-4B46-B595-738C74C38920}.Debug|x86.Build.0 = Debug|Win32
-		{AEAC8384-1F3B-4B46-B595-738C74C38920}.Release|x64.ActiveCfg = Release|x64
-		{AEAC8384-1F3B-4B46-B595-738C74C38920}.Release|x64.Build.0 = Release|x64
-		{AEAC8384-1F3B-4B46-B595-738C74C38920}.Release|x86.ActiveCfg = Release|Win32
-		{AEAC8384-1F3B-4B46-B595-738C74C38920}.Release|x86.Build.0 = Release|Win32
-	EndGlobalSection
-	GlobalSection(SolutionProperties) = preSolution
-		HideSolutionNode = FALSE
-	EndGlobalSection
-	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {5B1B0942-16DE-49A5-84DF-F2C342E09E4A}
-	EndGlobalSection
-EndGlobal
+#include <SFML/Graphics.hpp>
+#include <SFML/Audio.hpp>
+#include <vector>
+#include <cstdlib>
+#include <ctime>
+#include <cmath>
+#include <string>
+
+const int WINDOW_WIDTH = 400;
+const int WINDOW_HEIGHT = 600;
+const int NUM_PLATFORMS = 10;
+const float GRAVITY = 0.25f;
+const float JUMP_BASE = -7.5f;
+const float SCROLL_SPEED = 0.5f;  // slowed down
+
+enum GameState { MENU, SETTINGS, WAITING_FOR_JUMP, PLAYING, GAME_OVER };
+
+sf::View getLetterboxView(sf::View view, int windowWidth, int windowHeight) 
+{ 
+    float windowRatio = windowWidth / static_cast<float>(windowHeight);
+    float viewRatio = view.getSize().x / view.getSize().y;
+    float sizeX = 1.f, sizeY = 1.f, posX = 0.f, posY = 0.f;
+
+    if (windowRatio < viewRatio) 
+    {
+        sizeY = windowRatio / viewRatio;
+        posY = (1.f - sizeY) / 2.f;
+    }
+    else 
+    {
+        sizeX = viewRatio / windowRatio;
+        posX = (1.f - sizeX) / 2.f;
+    }
+
+    view.setViewport(sf::FloatRect(posX, posY, sizeX, sizeY));
+    return view;
+}
+
+class Platform 
+{
+public:
+    sf::Sprite sprite;
+    bool scored = false;
+
+    Platform(const sf::Texture& texture)
+    {
+        sprite.setTexture(texture);
+    }
+
+    void spawn(float x, float y) 
+    {
+        sprite.setPosition(x, y);
+        scored = false;
+    }
+
+    void Despawn() 
+    {
+        sprite.setPosition(-1000, -1000);
+        scored = false;
+    }
+};
+
+class Player 
+{
+public:
+    sf::Sprite sprite;
+    float velocityX = 0;
+    float velocityY = 0;
+    int score = 0;
+    bool onGround = true;
+
+    Player(const sf::Texture& texture) 
+    {
+        sprite.setTexture(texture);
+    }
+
+    void moveLeft() 
+    {
+        velocityX -= 0.3f;
+    }
+
+    void moveRight()
+    {
+        velocityX += 0.3f;
+    }
+
+    void jump()
+    {
+        if (onGround)
+        {
+            float comboFactor = std::min(1.0f, std::abs(velocityX) / 4.0f);
+            velocityY = JUMP_BASE * (1.0f + comboFactor);
+            onGround = false;
+        }
+    }
+};
+
+void resetPlatforms(std::vector<Platform>& platforms, const sf::Texture& texture)
+{
+    for (int i = 0; i < NUM_PLATFORMS; ++i)
+    {
+        float x = rand() % (WINDOW_WIDTH - texture.getSize().x);
+        float y = WINDOW_HEIGHT - i * 60;
+        platforms[i].spawn(x, y);
+    }
+}
+
+int main() 
+{
+    sf::RenderWindow window(sf::VideoMode(WINDOW_WIDTH, WINDOW_HEIGHT), "Icy Tower - SFML");
+    window.setFramerateLimit(60);
+    srand(static_cast<unsigned>(time(0)));
+
+    sf::View view(sf::FloatRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT));
+    view = getLetterboxView(view, WINDOW_WIDTH, WINDOW_HEIGHT);
+    window.setView(view);
+
+    sf::Texture backgroundTex, playerTex, platformTex;
+    if (!backgroundTex.loadFromFile("background.jpg") ||
+        !playerTex.loadFromFile("player.jpg") ||
+        !platformTex.loadFromFile("platform.jpg")) return -1;
+
+    sf::Font font;
+    if (!font.loadFromFile("arial.ttf")) return -1;
+
+    sf::Music music;
+    if (!music.openFromFile("background.mp3")) return -1;
+    music.setLoop(true);
+    music.play();
+
+    sf::Sprite background(backgroundTex);
+    Player player(playerTex);
+    std::vector<Platform> platforms;
+    for (int i = 0; i < NUM_PLATFORMS; ++i)
+        platforms.emplace_back(platformTex);
+    resetPlatforms(platforms, platformTex);
+    player.sprite.setPosition(platforms[0].sprite.getPosition().x + 15, platforms[0].sprite.getPosition().y - playerTex.getSize().y);
+
+    sf::Text scoreText("", font, 20);
+    scoreText.setFillColor(sf::Color::Yellow);
+    scoreText.setPosition(10, 10);
+
+    sf::Text heightText("", font, 20);
+    heightText.setFillColor(sf::Color::Cyan);
+    heightText.setPosition(280, 10);
+
+    sf::Text finalScoreText("", font, 24);
+    finalScoreText.setFillColor(sf::Color::White);
+    finalScoreText.setPosition(WINDOW_WIDTH / 2.f - 80, WINDOW_HEIGHT / 2.f - 80);
+
+    sf::Text gameOverOptions[2];
+    std::string gameOverLabels[2] = { "Retry", "Main Menu" };
+    int selectedGameOverItem = 0;
+
+    for (int i = 0; i < 2; ++i) {
+        gameOverOptions[i].setFont(font);
+        gameOverOptions[i].setCharacterSize(24);
+        gameOverOptions[i].setString(gameOverLabels[i]);
+        gameOverOptions[i].setPosition(WINDOW_WIDTH / 2.f - 60, WINDOW_HEIGHT / 2.f + i * 40);
+    }
+
+    sf::CircleShape redPointer(5);
+    redPointer.setFillColor(sf::Color::Red);
+
+    std::vector<std::string> menuItems = { "Play", "Settings", "Exit" };
+    sf::Text menuTexts[3];
+    int selectedItem = 0;
+
+    for (int i = 0; i < 3; ++i) {
+        menuTexts[i].setFont(font);
+        menuTexts[i].setString(menuItems[i]);
+        menuTexts[i].setCharacterSize(24);
+        menuTexts[i].setFillColor(sf::Color::White);
+        menuTexts[i].setPosition(WINDOW_WIDTH / 2.f - 60, 200 + i * 40);
+    }
+
+    redPointer.setPosition(menuTexts[0].getPosition().x - 20, menuTexts[0].getPosition().y + 10);
+
+    int volume = 50;
+    music.setVolume(volume);
+    sf::Text volumeText;
+    volumeText.setFont(font);
+    volumeText.setCharacterSize(24);
+    volumeText.setFillColor(sf::Color::White);
+    volumeText.setPosition(80, 250);
+
+    sf::Text returnText("Press Enter to return", font, 18);
+    returnText.setPosition(80, 300);
+    returnText.setFillColor(sf::Color::White);
+
+    GameState state = MENU;
+    bool enterPressedLastFrame = false;
+    bool upPressedLastFrame = false;
+    bool downPressedLastFrame = false;
+
+    while (window.isOpen()) {
+        sf::Event event;
+        while (window.pollEvent(event)) {
+            if (event.type == sf::Event::Closed)
+                window.close();
+            else if (event.type == sf::Event::Resized) {
+                view = getLetterboxView(view, event.size.width, event.size.height);
+                window.setView(view);
+            }
+        }
+
+        // --- Menu
+        if (state == MENU)
+        {
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up) && !upPressedLastFrame)
+            {
+                selectedItem = (selectedItem + 2) % 3;
+                redPointer.setPosition(menuTexts[selectedItem].getPosition().x - 20, menuTexts[selectedItem].getPosition().y + 10);
+            }
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down) && !downPressedLastFrame)
+            {
+                selectedItem = (selectedItem + 1) % 3; 
+                redPointer.setPosition(menuTexts[selectedItem].getPosition().x - 20, menuTexts[selectedItem].getPosition().y + 10);
+            }
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Enter) && !enterPressedLastFrame) 
+            {
+                if (selectedItem == 0) state = WAITING_FOR_JUMP;
+                else if (selectedItem == 1) state = SETTINGS;
+                else if (selectedItem == 2) window.close();
+            }
+        }
+
+        // --- Settings
+        else if (state == SETTINGS) 
+        {
+            volumeText.setString("Volume: " + std::to_string(volume));
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left))
+            {
+                volume = std::max(0, volume - 1);
+                music.setVolume(volume);
+            }
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) 
+            {
+                volume = std::min(100, volume + 1);
+                music.setVolume(volume);
+            }
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Enter) && !enterPressedLastFrame)
+            {
+                state = MENU;
+            }
+        }
+
+        // --- Waiting
+        else if (state == WAITING_FOR_JUMP)
+        {
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left)) player.moveLeft();
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) player.moveRight();
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Space)) 
+            {
+                player.jump();
+                state = PLAYING;
+            }
+        }
+
+        // --- Playing
+        else if (state == PLAYING) 
+        {
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left)) player.moveLeft();
+            else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) player.moveRight();
+            else player.velocityX *= 0.9f;
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Space)) player.jump();
+
+            player.velocityY += GRAVITY;
+            player.sprite.move(player.velocityX, player.velocityY);
+            player.onGround = false;
+
+            // Bounds
+            if (player.sprite.getPosition().x < 0)
+                player.sprite.setPosition(0, player.sprite.getPosition().y);
+            if (player.sprite.getPosition().x + player.sprite.getGlobalBounds().width > WINDOW_WIDTH)
+                player.sprite.setPosition(WINDOW_WIDTH - player.sprite.getGlobalBounds().width, player.sprite.getPosition().y);
+
+            for (auto& plat : platforms) 
+            {
+                if (player.velocityY > 0 &&
+                    player.sprite.getGlobalBounds().intersects(plat.sprite.getGlobalBounds()) &&
+                    player.sprite.getPosition().y + player.sprite.getGlobalBounds().height - player.velocityY < plat.sprite.getPosition().y) {
+                    player.sprite.setPosition(player.sprite.getPosition().x, plat.sprite.getPosition().y - player.sprite.getGlobalBounds().height);
+                    player.velocityY = 0;
+                    player.onGround = true;
+                }
+            }
+
+            if (player.sprite.getPosition().y < WINDOW_HEIGHT / 2) 
+            {
+                float diff = (WINDOW_HEIGHT / 2) - player.sprite.getPosition().y;
+                player.sprite.move(0, diff);
+                for (auto& plat : platforms) plat.sprite.move(0, diff);
+            }
+
+            for (auto& plat : platforms) 
+            {
+                if (!plat.scored && player.sprite.getPosition().y < plat.sprite.getPosition().y) 
+                {
+                    plat.scored = true;
+                    player.score++;
+                }
+            }
+
+            for (auto& plat : platforms) {
+                plat.sprite.move(0, SCROLL_SPEED);
+                if (plat.sprite.getPosition().y > WINDOW_HEIGHT) {
+                    float highestY = WINDOW_HEIGHT;
+                    for (const auto& p : platforms)
+                        highestY = std::min(highestY, p.sprite.getPosition().y);
+                    float newX = rand() % (WINDOW_WIDTH - platformTex.getSize().x);
+                    float newY = highestY - (rand() % 60 + 50);
+                    plat.spawn(newX, newY);
+                }
+            }
+
+            if (player.sprite.getPosition().y > WINDOW_HEIGHT) {
+                finalScoreText.setString("Final Score: " + std::to_string(player.score));
+                state = GAME_OVER;
+            }
+
+            scoreText.setString("Score: " + std::to_string(player.score));
+            heightText.setString("Height: " + std::to_string(WINDOW_HEIGHT - static_cast<int>(player.sprite.getPosition().y)));
+        }
+
+        // --- Game Over
+        else if (state == GAME_OVER) {
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up) && !upPressedLastFrame)
+                selectedGameOverItem = (selectedGameOverItem + 1) % 2;
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down) && !downPressedLastFrame)
+                selectedGameOverItem = (selectedGameOverItem + 1) % 2;
+            redPointer.setPosition(gameOverOptions[selectedGameOverItem].getPosition().x - 20, gameOverOptions[selectedGameOverItem].getPosition().y + 10);
+
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Enter) && !enterPressedLastFrame) {
+                resetPlatforms(platforms, platformTex);
+                player.sprite.setPosition(platforms[0].sprite.getPosition().x + 15, platforms[0].sprite.getPosition().y - playerTex.getSize().y);
+                player.velocityX = player.velocityY = 0;
+                player.onGround = true;
+                player.score = 0;
+                scoreText.setString("Score: 0");  
+                if (selectedGameOverItem == 0) state = WAITING_FOR_JUMP;
+                else {
+                    selectedItem = 0;
+                    redPointer.setPosition(menuTexts[0].getPosition().x - 20, menuTexts[0].getPosition().y + 10);
+                    state = MENU;
+                }
+            }
+        }
+
+        // Key states
+        enterPressedLastFrame = sf::Keyboard::isKeyPressed(sf::Keyboard::Enter);
+        upPressedLastFrame = sf::Keyboard::isKeyPressed(sf::Keyboard::Up);
+        downPressedLastFrame = sf::Keyboard::isKeyPressed(sf::Keyboard::Down);
+
+        // --- Draw
+        window.clear();
+        window.setView(view);
+        window.draw(background);
+
+        if (state == MENU) {
+            for (int i = 0; i < 3; ++i) window.draw(menuTexts[i]);
+            window.draw(redPointer);
+        }
+        else if (state == SETTINGS) {
+            window.draw(volumeText);
+            window.draw(returnText);
+        }
+        else {
+            for (auto& plat : platforms) window.draw(plat.sprite);
+            window.draw(player.sprite);
+            if (state == PLAYING) {
+                window.draw(scoreText);
+                window.draw(heightText);
+            }
+            if (state == GAME_OVER) {
+                for (int i = 0; i < 2; ++i) window.draw(gameOverOptions[i]);
+                window.draw(finalScoreText);
+                window.draw(redPointer);
+            }
+        }
+
+        window.display();
+    }
+
+    return 0;
+}
